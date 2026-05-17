@@ -1,0 +1,175 @@
+function buildCommand(command, description) {
+  return { command, description };
+}
+
+const AGENT_GROUP_COMMANDS = {
+  eng: [
+    buildCommand("help", "Show the quick help card"),
+    buildCommand("guide", "Send the beginner PDF guidebook"),
+    buildCommand("clear", "Clear General and keep only the active menu"),
+    buildCommand("new", "Create a new work topic"),
+    buildCommand("hosts", "Show available execution hosts"),
+    buildCommand("host", "Show one execution host status"),
+    buildCommand("zoo", "Open the dedicated Project Catalog topic"),
+    buildCommand("status", "Show session and runtime status"),
+    buildCommand("limits", "Show the current Codex rate limits"),
+    buildCommand("global", "Open the General-topic global settings menu"),
+    buildCommand("menu", "Open the topic-local settings menu"),
+    buildCommand("language", "Show or change the UI language"),
+    buildCommand("q", "Queue the next Agent prompt"),
+    buildCommand("wait", "Manage the manual prompt buffer"),
+    buildCommand("suffix", "Show or change prompt suffixes"),
+    buildCommand("model", "Set or inspect the Agent model"),
+    buildCommand("reasoning", "Set or inspect Agent reasoning"),
+    buildCommand("interrupt", "Stop the active run"),
+    buildCommand("diff", "Send the current workspace diff"),
+    buildCommand("goal", "Show or change the app-server-v2 goal"),
+    buildCommand("compact", "Rebuild the session brief"),
+    buildCommand("purge", "Reset local session state"),
+  ],
+  rus: [
+    buildCommand("help", "Показать краткую шпаргалку"),
+    buildCommand("guide", "Отправить PDF-гайдбук для новичка"),
+    buildCommand("clear", "Очистить General и оставить только active menu"),
+    buildCommand("new", "Создать новую рабочую тему"),
+    buildCommand("hosts", "Показать доступные execution hosts"),
+    buildCommand("host", "Показать статус одного execution host"),
+    buildCommand("zoo", "Открыть отдельный Project Catalog topic"),
+    buildCommand("status", "Показать статус сессии и рантайма"),
+    buildCommand("limits", "Показать текущие лимиты Codex"),
+    buildCommand("global", "Открыть Global settings menu в General"),
+    buildCommand("menu", "Открыть menu локальных настроек топика"),
+    buildCommand("language", "Показать или сменить язык"),
+    buildCommand("q", "Поставить следующий Agent prompt в очередь"),
+    buildCommand("wait", "Управлять manual prompt buffer"),
+    buildCommand("suffix", "Показать или сменить prompt suffix"),
+    buildCommand("model", "Agent model для топика или global"),
+    buildCommand("reasoning", "Agent reasoning для топика или global"),
+    buildCommand("interrupt", "Остановить active run"),
+    buildCommand("diff", "Отправить diff текущего workspace"),
+    buildCommand("goal", "Показать или сменить app-server-v2 goal"),
+    buildCommand("compact", "Пересобрать brief этой сессии"),
+    buildCommand("purge", "Сбросить local session state"),
+  ],
+};
+
+const AGENT_PRIVATE_COMMANDS = {
+  eng: [
+    buildCommand("help", "Show the private-lane help"),
+    buildCommand("status", "Show emergency lane status"),
+    buildCommand("interrupt", "Stop the emergency run"),
+  ],
+  rus: [
+    buildCommand("help", "Показать помощь по private lane"),
+    buildCommand("status", "Показать статус emergency lane"),
+    buildCommand("interrupt", "Остановить emergency run"),
+  ],
+};
+
+function buildLocalizedEntries(scope, localizedCommands) {
+  return [
+    {
+      scope,
+      commands: localizedCommands.eng,
+      languageCode: null,
+    },
+    {
+      scope,
+      commands: localizedCommands.rus,
+      languageCode: "ru",
+    },
+  ];
+}
+
+function buildLocalizedScopeEntries(scopes) {
+  return scopes.flatMap((scope) => [
+    {
+      scope,
+      languageCode: null,
+    },
+    {
+      scope,
+      languageCode: "ru",
+    },
+  ]);
+}
+
+function buildTelegramCommandClearPlan(kind, forumChatId) {
+  const normalizedForumChatId = String(forumChatId || "").trim();
+  if (!normalizedForumChatId) {
+    throw new Error("buildTelegramCommandClearPlan requires forumChatId");
+  }
+
+  if (kind === "agent") {
+    return buildLocalizedScopeEntries([
+      { type: "default" },
+      { type: "all_group_chats" },
+      { type: "chat", chat_id: normalizedForumChatId },
+      { type: "all_private_chats" },
+    ]);
+  }
+
+  throw new Error(`Unsupported Telegram command catalog kind: ${kind}`);
+}
+
+export function buildTelegramCommandSyncPlan(
+  kind,
+  forumChatId,
+) {
+  const normalizedForumChatId = String(forumChatId || "").trim();
+  if (!normalizedForumChatId) {
+    throw new Error("buildTelegramCommandSyncPlan requires forumChatId");
+  }
+
+  if (kind === "agent") {
+    return [
+      ...buildLocalizedEntries({ type: "default" }, AGENT_GROUP_COMMANDS),
+      ...buildLocalizedEntries({ type: "all_group_chats" }, AGENT_GROUP_COMMANDS),
+      ...buildLocalizedEntries(
+        { type: "chat", chat_id: normalizedForumChatId },
+        AGENT_GROUP_COMMANDS,
+      ),
+      ...buildLocalizedEntries(
+        { type: "all_private_chats" },
+        AGENT_PRIVATE_COMMANDS,
+      ),
+    ];
+  }
+
+  throw new Error(`Unsupported Telegram command catalog kind: ${kind}`);
+}
+
+export async function syncTelegramCommandCatalog(
+  api,
+  kind,
+  forumChatId,
+  options = {},
+) {
+  const plan = buildTelegramCommandSyncPlan(kind, forumChatId, options);
+  if (plan.length === 0) {
+    const clearPlan = buildTelegramCommandClearPlan(kind, forumChatId);
+    for (const entry of clearPlan) {
+      const params = {
+        scope: entry.scope,
+      };
+      if (entry.languageCode) {
+        params.language_code = entry.languageCode;
+      }
+      await api.deleteMyCommands(params);
+    }
+    return plan;
+  }
+
+  for (const entry of plan) {
+    const params = {
+      commands: entry.commands,
+      scope: entry.scope,
+    };
+    if (entry.languageCode) {
+      params.language_code = entry.languageCode;
+    }
+    await api.setMyCommands(params);
+  }
+
+  return plan;
+}
