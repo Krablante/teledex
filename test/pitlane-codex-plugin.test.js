@@ -113,6 +113,30 @@ test("renderCodexPluginSyncConfigText removes old pitlane MCP and keeps hook plu
   assert.match(rendered, new RegExp(`^\\[plugins\\."${PITLANE_CODEX_PLUGIN_CONFIG_KEY}"\\]$`, "mu"));
 });
 
+test("renderCodexPluginSyncConfigText writes trusted plugin hook state", () => {
+  const rendered = renderCodexPluginSyncConfigText('model = "gpt-5.5"\n', {
+    pitlaneSynced: true,
+    rtkSynced: true,
+    rtkHookTrustEntries: [{
+      key: "rtk-codex-plugin@community-local:hooks/hooks.json:pre_tool_use:0:0",
+      trustedHash: "sha256:rtk",
+    }],
+    pitlaneHookTrustEntries: [{
+      key: "pitlane-codex-plugin@community-local:hooks/hooks.json:pre_tool_use:0:0",
+      trustedHash: "sha256:pitlane",
+    }],
+  });
+
+  assert.match(
+    rendered,
+    /^\[hooks\.state\."rtk-codex-plugin@community-local:hooks\/hooks\.json:pre_tool_use:0:0"\]\ntrusted_hash = "sha256:rtk"$/mu,
+  );
+  assert.match(
+    rendered,
+    /^\[hooks\.state\."pitlane-codex-plugin@community-local:hooks\/hooks\.json:pre_tool_use:0:0"\]\ntrusted_hash = "sha256:pitlane"$/mu,
+  );
+});
+
 test("Pitlane Codex plugin cache path resolves from the Codex root", () => {
   assert.equal(
     resolvePitlaneCodexPluginCachePath("~/.codex"),

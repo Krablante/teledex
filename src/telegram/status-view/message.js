@@ -18,6 +18,7 @@ import {
 } from "../../session-manager/codex-runtime-profiles.js";
 import { DEEPSEEK_HTTP_BACKEND } from "../../deepseek-runtime/deepseek-http-runner.js";
 import { buildCodexLimitsStatusLines } from "../../codex-runtime/limits.js";
+import { buildHookEconomyStatusLines } from "../../pty-worker/hook-economy.js";
 import { getTopicLabel } from "../command-parsing.js";
 import { buildHostStatusLines } from "../command-handlers/host-commands.js";
 import {
@@ -155,6 +156,8 @@ export function buildStatusMessage(
     ?? null;
   const deepSeekRuntimeThread = displayConfig?.deepSeekRuntimeThread ?? null;
   const liveStatusWarning = displayConfig?.liveStatusWarning ?? null;
+  const hookEconomySummary =
+    activeRun?.state?.hookEconomy ?? displayConfig?.hookEconomySummary ?? null;
   const deepSeekLiveTurnId = deepSeekRuntimeThread?.latestTurnId ?? null;
   const deepSeekLiveTurnStatus = deepSeekRuntimeThread?.latestTurnStatus ?? null;
   const deepSeekTurnDisplay = deepSeekActiveTurnId
@@ -224,6 +227,12 @@ export function buildStatusMessage(
           }`,
         ]
         : buildCodexLimitsStatusLines(limitsSummary, language)),
+    ...(hookEconomySummary?.completedRuns
+      ? [
+        "",
+        ...buildHookEconomyStatusLines(hookEconomySummary, language),
+      ]
+      : []),
     "",
     ...buildContextStatusLines(
       {

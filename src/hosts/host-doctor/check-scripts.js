@@ -374,6 +374,398 @@ export function buildCodexPitlaneCleanupScript(configPath) {
   ].join("; ");
 }
 
+export function buildCodexPluginHooksTrustedScript(configPath) {
+  if (!configPath) {
+    return "exit 1";
+  }
+
+  const codexRoot = path.posix.dirname(configPath);
+  const rtkPluginPath = resolveWorkspaceRtkCodexPluginCachePath(codexRoot);
+  const pitlanePluginPath = resolvePitlaneCodexPluginCachePath(codexRoot);
+  const script = String.raw`
+const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
+
+const [configPath, rtkPluginRoot, pitlanePluginRoot] = process.argv.slice(2);
+const plugins = [
+  {
+    id: "rtk-codex-plugin@community-local",
+    root: rtkPluginRoot,
+  },
+  {
+    id: "pitlane-codex-plugin@community-local",
+    root: pitlanePluginRoot,
+  },
+];
+const eventLabels = new Map([
+  ["PreToolUse", "pre_tool_use"],
+  ["PermissionRequest", "permission_request"],
+  ["PostToolUse", "post_tool_use"],
+  ["PreCompact", "pre_compact"],
+  ["PostCompact", "post_compact"],
+  ["SessionStart", "session_start"],
+  ["UserPromptSubmit", "user_prompt_submit"],
+  ["Stop", "stop"],
+]);
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^\x24{}()|[\]\\]/g, "\\$&");
+}
+
+function stripTomlInlineComment(line) {
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  let result = "";
+  for (const char of String(line)) {
+    if (doubleQuoted && escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+    if (doubleQuoted && char === "\\") {
+      result += char;
+      escaped = true;
+      continue;
+    }
+    if (!doubleQuoted && char === "'") {
+      singleQuoted = !singleQuoted;
+      result += char;
+      continue;
+    }
+    if (!singleQuoted && char === '"') {
+      doubleQuoted = !doubleQuoted;
+      result += char;
+      continue;
+    }
+    if (!singleQuoted && !doubleQuoted && char === "#") {
+      break;
+    }
+    result += char;
+  }
+  return result.trim();
+}
+
+function normalizeTomlDottedKey(rawName) {
+  const raw = String(rawName || "");
+  const parts = [];
+  let index = 0;
+  while (index < raw.length) {
+    while (/\s/u.test(raw[index] || "")) {
+      index += 1;
+    }
+    if (raw[index] === ".") {
+      index += 1;
+      continue;
+    }
+    if (index >= raw.length) {
+      break;
+    }
+    if (raw[index] === '"') {
+      let value = '"';
+      index += 1;
+      let escaped = false;
+      for (; index < raw.length; index += 1) {
+        const char = raw[index];
+        value += char;
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (char === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (char === '"') {
+          index += 1;
+          break;
+        }
+      }
+      try {
+        parts.push(JSON.stringify(JSON.parse(value)));
+      } catch {
+        return raw.trim();
+      }
+      continue;
+    }
+    if (raw[index] === "'") {
+      index += 1;
+      let value = "";
+      for (; index < raw.length && raw[index] !== "'"; index += 1) {
+        value += raw[index];
+      }
+      if (raw[index] !== "'") {
+        return raw.trim();
+      }
+      index += 1;
+      parts.push(JSON.stringify(value));
+      continue;
+    }
+    let value = "";
+    for (; index < raw.length; index += 1) {
+      const char = raw[index];
+      if (char === "." || /\s/u.test(char)) {
+        break;
+      }
+      value += char;
+    }
+    if (!value) {
+      return raw.trim();
+    }
+    parts.push(value);
+  }
+  return parts.length > 0 ? parts.join(".") : raw.trim();
+}
+
+function tomlTables(configText) {
+  const tables = new Map();
+  let currentName = null;
+  let currentLines = [];
+  const flush = () => {
+    if (currentName != null) {
+      tables.set(currentName, currentLines);
+    }
+    currentName = null;
+    currentLines = [];
+  };
+  for (const line of configText.split(/\r?\n/u)) {
+    const uncommented = stripTomlInlineComment(line);
+    const header = uncommented.match(/^\[([^\]]+)\]$/u);
+    if (header) {
+      flush();
+      currentName = normalizeTomlDottedKey(header[1]);
+      currentLines = [];
+      continue;
+    }
+    if (/^\s*\[/u.test(uncommented)) {
+      flush();
+      continue;
+    }
+    if (currentName != null) {
+      currentLines.push(line);
+    }
+  }
+  flush();
+  return tables;
+}
+
+function tomlAssignmentValue(blockLines, keyName) {
+  for (const line of blockLines || []) {
+    const uncommented = stripTomlInlineComment(line);
+    if (!uncommented) {
+      continue;
+    }
+    const equals = uncommented.indexOf("=");
+    if (equals < 0) {
+      continue;
+    }
+    if (uncommented.slice(0, equals).trim() === keyName) {
+      return uncommented.slice(equals + 1).trim();
+    }
+  }
+  return null;
+}
+
+function tomlBoolean(blockLines, keyName) {
+  const value = tomlAssignmentValue(blockLines, keyName);
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return null;
+}
+
+function tomlString(blockLines, keyName) {
+  const value = tomlAssignmentValue(blockLines, keyName);
+  if (value == null) {
+    return null;
+  }
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1);
+  }
+  return null;
+}
+
+function canonical(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonical);
+  }
+  if (value && typeof value === "object") {
+    const output = {};
+    for (const key of Object.keys(value).sort()) {
+      output[key] = canonical(value[key]);
+    }
+    return output;
+  }
+  return value;
+}
+
+function versionForHookIdentity(value) {
+  return "sha256:" + crypto
+    .createHash("sha256")
+    .update(JSON.stringify(canonical(value)))
+    .digest("hex");
+}
+
+function hookHash(eventName, group, handler) {
+  const eventKey = eventLabels.get(eventName);
+  const timeout = Math.max(1, Number(handler.timeout ?? 600) || 600);
+  const normalizedGroup = {
+    hooks: [{
+      type: "command",
+      command: String(handler.command ?? ""),
+      timeout,
+      async: Boolean(handler.async),
+      statusMessage: handler.statusMessage ?? null,
+    }],
+  };
+  if (group.matcher != null) {
+    normalizedGroup.matcher = String(group.matcher);
+  }
+  return versionForHookIdentity({ event_name: eventKey, ...normalizedGroup });
+}
+
+function pluginTableStatus(tables, pluginId) {
+  const block = tables.get("plugins." + JSON.stringify(pluginId));
+  if (!block) {
+    return { present: false, enabled: false };
+  }
+  const enabled = tomlBoolean(block, "enabled");
+  return {
+    present: true,
+    enabled: enabled !== false,
+  };
+}
+
+function featureEnabled(tables, name) {
+  return tomlBoolean(tables.get("features"), name) === true;
+}
+
+function hookStateBlock(tables, key) {
+  return tables.get("hooks.state." + JSON.stringify(key)) || null;
+}
+
+function resolveManifestHookPaths(pluginRoot, manifest) {
+  if (!manifest.hooks) {
+    return [path.join(pluginRoot, "hooks", "hooks.json")];
+  }
+  if (typeof manifest.hooks === "string") {
+    return [path.resolve(pluginRoot, manifest.hooks)];
+  }
+  if (Array.isArray(manifest.hooks) && manifest.hooks.every((entry) => typeof entry === "string")) {
+    return manifest.hooks.map((entry) => path.resolve(pluginRoot, entry));
+  }
+  return [];
+}
+
+function discover(plugin) {
+  const manifestPath = path.join(plugin.root, ".codex-plugin", "plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const entries = [];
+  for (const hookFilePath of resolveManifestHookPaths(plugin.root, manifest)) {
+    const hooksFile = JSON.parse(fs.readFileSync(hookFilePath, "utf8"));
+    const hooks = hooksFile.hooks && typeof hooksFile.hooks === "object" ? hooksFile.hooks : {};
+    const relativePath = path.relative(plugin.root, hookFilePath).replace(/\\/g, "/");
+    const keySource = plugin.id + ":" + relativePath;
+    for (const [eventName, groups] of Object.entries(hooks)) {
+      if (!eventLabels.has(eventName) || !Array.isArray(groups)) {
+        continue;
+      }
+      for (const [groupIndex, group] of groups.entries()) {
+        const handlers = Array.isArray(group.hooks) ? group.hooks : [];
+        for (const [handlerIndex, handler] of handlers.entries()) {
+          if (handler && handler.type === "command") {
+            const eventKey = eventLabels.get(eventName);
+            entries.push({
+              key: keySource + ":" + eventKey + ":" + groupIndex + ":" + handlerIndex,
+              hash: hookHash(eventName, group, handler),
+              command: String(handler.command ?? ""),
+            });
+          }
+        }
+      }
+    }
+  }
+  return entries;
+}
+
+const configText = fs.readFileSync(configPath, "utf8");
+const tables = tomlTables(configText);
+const pluginStatuses = plugins.map((plugin) => ({
+  plugin,
+  status: pluginTableStatus(tables, plugin.id),
+}));
+const disabledConfiguredPlugin = pluginStatuses.find(({ status }) =>
+  status.present && !status.enabled
+);
+if (disabledConfiguredPlugin) {
+  fail("Codex plugin hook is inactive: " + disabledConfiguredPlugin.plugin.id);
+}
+const enabledPlugins = pluginStatuses
+  .filter(({ status }) => status.enabled)
+  .map(({ plugin }) => plugin);
+if (enabledPlugins.length === 0) {
+  process.exit(0);
+}
+if (!featureEnabled(tables, "plugins") || !featureEnabled(tables, "plugin_hooks")) {
+  fail("Codex plugin hooks are configured but [features].plugins/plugin_hooks are not both true");
+}
+
+for (const plugin of enabledPlugins) {
+  if (!fs.existsSync(path.join(plugin.root, ".codex-plugin", "plugin.json"))
+    || !fs.existsSync(path.join(plugin.root, "hooks", "hooks.json"))) {
+    fail("Codex plugin hook cache is missing for " + plugin.id);
+  }
+  const entries = discover(plugin);
+  if (entries.length === 0) {
+    fail("Codex plugin has no command hook declarations: " + plugin.id);
+  }
+  for (const entry of entries) {
+    const executablePath = entry.command.replaceAll("\${PLUGIN_ROOT}", plugin.root);
+    if (!fs.existsSync(executablePath) || !(fs.statSync(executablePath).mode & 0o111)) {
+      fail("Codex plugin hook command is not executable: " + entry.key);
+    }
+    const block = hookStateBlock(tables, entry.key);
+    if (!block) {
+      fail("Codex plugin hook is untrusted: " + entry.key);
+    }
+    if (tomlBoolean(block, "enabled") === false) {
+      fail("Codex plugin hook is disabled: " + entry.key);
+    }
+    const trustedHash = tomlString(block, "trusted_hash");
+    if (trustedHash !== entry.hash) {
+      fail("Codex plugin hook trusted_hash mismatch: " + entry.key);
+    }
+  }
+}
+`;
+
+  return [
+    `config_path=${shellQuote(configPath)}`,
+    `rtk_plugin_root=${shellQuote(rtkPluginPath)}`,
+    `pitlane_plugin_root=${shellQuote(pitlanePluginPath)}`,
+    'if [[ "$config_path" == "~" ]]; then config_path="$HOME"; elif [[ "$config_path" == "~/"* ]]; then config_path="$HOME/${config_path:2}"; fi',
+    'if [[ "$rtk_plugin_root" == "~" ]]; then rtk_plugin_root="$HOME"; elif [[ "$rtk_plugin_root" == "~/"* ]]; then rtk_plugin_root="$HOME/${rtk_plugin_root:2}"; fi',
+    'if [[ "$pitlane_plugin_root" == "~" ]]; then pitlane_plugin_root="$HOME"; elif [[ "$pitlane_plugin_root" == "~/"* ]]; then pitlane_plugin_root="$HOME/${pitlane_plugin_root:2}"; fi',
+    `node - "$config_path" "$rtk_plugin_root" "$pitlane_plugin_root" <<'NODE'\n${script}\nNODE`,
+  ].join("\n");
+}
+
 export function buildCodexExecHelpScript(executablePath) {
   if (!executablePath) {
     return "exit 1";

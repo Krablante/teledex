@@ -1,3 +1,5 @@
+import { summarizeHookRun } from "./hook-economy.js";
+
 export function hasChildExited(child) {
   if (!child) {
     return true;
@@ -214,6 +216,22 @@ export function summarizeCodexEvent(event) {
       threadId: event.params?.threadId || null,
       turnId: event.params?.turnId || null,
       goal: summarizeGoalValue(event.params?.goal),
+    };
+  }
+
+  if (method === "hook/started" || method === "hook/completed") {
+    const hook = summarizeHookRun(event.params?.run);
+    if (!hook) {
+      return null;
+    }
+
+    return {
+      kind: "hook",
+      eventType: method === "hook/started" ? "hook.started" : "hook.completed",
+      text: method === "hook/started" ? "Codex hook started" : "Codex hook completed",
+      threadId: event.params?.threadId || null,
+      turnId: event.params?.turnId || null,
+      hook,
     };
   }
 

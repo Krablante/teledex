@@ -9,14 +9,26 @@ import { promisify } from "node:util";
 import { buildHybridCodexMcpConfigText } from "../src/hosts/codex-mcp-config.js";
 import {
   buildCodexPitlaneCleanupScript,
+  buildCodexPluginHooksTrustedScript,
   buildWorkerMcpConfigScript,
   hostDoctorResultsHaveFailures,
   inspectHostReadiness,
   resolveCodexSpaceFreshnessMaxAgeSecs,
   runHostDoctor,
 } from "../src/hosts/host-doctor.js";
+import {
+  discoverCodexPluginHookTrustEntries,
+  ensureCodexPluginHookTrustConfigText,
+} from "../src/runtime/codex-plugin-hook-trust.js";
+import {
+  RTK_CODEX_PLUGIN_CONFIG_KEY,
+  resolveWorkspaceRtkCodexPluginCachePath,
+} from "../src/runtime/rtk-codex-plugin.js";
+import {
+  PITLANE_CODEX_PLUGIN_CONFIG_KEY,
+  resolvePitlaneCodexPluginCachePath,
+} from "../src/runtime/pitlane-codex-plugin.js";
 import { HostRegistryService } from "../src/hosts/host-registry-service.js";
-import { resolvePitlaneCodexPluginCachePath } from "../src/runtime/pitlane-codex-plugin.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -176,7 +188,7 @@ test("inspectHostReadiness requires the operator CLI toolbelt", async () => {
   );
 });
 
-test("inspectHostReadiness reports Codex RTK plugin issues without blocking readiness", async () => {
+test("inspectHostReadiness fails when Codex RTK plugin readiness fails", async () => {
   const snapshot = await inspectHostReadiness({
     codexSpaceRoot: "/tmp/teledex-context",
     connectTimeoutSecs: 5,
@@ -197,18 +209,15 @@ test("inspectHostReadiness reports Codex RTK plugin issues without blocking read
     },
   });
 
-  assert.equal(snapshot.ready, true);
-  assert.equal(snapshot.failure_reason, null);
+  assert.equal(snapshot.ready, false);
+  assert.equal(snapshot.failure_reason, "codex-rtk-plugin");
   assert.equal(
     snapshot.checks.some(
       (check) => check.id === "codex-rtk-plugin" && check.ok === false,
     ),
     true,
   );
-  assert.deepEqual(
-    snapshot.warnings.map((warning) => warning.id),
-    ["codex-rtk-plugin"],
-  );
+  assert.deepEqual(snapshot.warnings.map((warning) => warning.id), []);
 });
 
 test("inspectHostReadiness verifies host-local Pitlane command smoke", async () => {
@@ -315,6 +324,182 @@ test("buildCodexPitlaneCleanupScript rejects stale pitlane MCP config and bad pl
   await assert.rejects(
     execFileAsync("bash", ["-c", script]),
     /RTK plugin must be configured before Pitlane plugin/u,
+  );
+});
+
+test("buildCodexPluginHooksTrustedScript rejects enabled plugins without trusted hook state", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-hook-trust-"));
+  const configPath = path.join(tempDir, "config.toml");
+  const rtkPluginRoot = resolveWorkspaceRtkCodexPluginCachePath(tempDir);
+  const pitlanePluginRoot = resolvePitlaneCodexPluginCachePath(tempDir);
+  const rtkHooksJson = {
+    hooks: {
+      PreToolUse: [{
+        matcher: "^(Bash|exec_command|functions\\.exec_command)$",
+        hooks: [{
+          type: "command",
+          command: "${PLUGIN_ROOT}/hooks/rtk-codex-hook",
+          timeout: 5,
+          statusMessage: "RTK command rewrite",
+        }],
+      }],
+      PostToolUse: [{
+        matcher: "^Bash$",
+        hooks: [{
+          type: "command",
+          command: "${PLUGIN_ROOT}/hooks/rtk-output-post-hook",
+          timeout: 8,
+          statusMessage: "RTK output budget guard",
+        }],
+      }],
+    },
+  };
+  const pitlaneHooksJson = {
+    hooks: {
+      PreToolUse: [{
+        matcher: "^(Bash|exec_command|functions\\.exec_command)$",
+        hooks: [{
+          type: "command",
+          command: "${PLUGIN_ROOT}/hooks/pitlane-codex-hook",
+          timeout: 5,
+          statusMessage: "Pitlane code navigation rewrite",
+        }],
+      }],
+    },
+  };
+  for (const [pluginRoot, hooksJson] of [
+    [rtkPluginRoot, rtkHooksJson],
+    [pitlanePluginRoot, pitlaneHooksJson],
+  ]) {
+    await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+    await fs.mkdir(path.join(pluginRoot, "hooks"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+      '{"hooks":"./hooks/hooks.json"}\n',
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(pluginRoot, "hooks", "hooks.json"),
+      JSON.stringify(hooksJson, null, 2),
+      "utf8",
+    );
+  }
+  for (const filePath of [
+    path.join(rtkPluginRoot, "hooks", "rtk-codex-hook"),
+    path.join(rtkPluginRoot, "hooks", "rtk-output-post-hook"),
+    path.join(pitlanePluginRoot, "hooks", "pitlane-codex-hook"),
+  ]) {
+    await fs.writeFile(filePath, "#!/usr/bin/env sh\nexit 0\n", "utf8");
+    await fs.chmod(filePath, 0o700);
+  }
+  const baseConfig = [
+    "[features]",
+    "plugins = true",
+    "plugin_hooks = true",
+    "",
+    `[plugins."${RTK_CODEX_PLUGIN_CONFIG_KEY}"]`,
+    "enabled = true",
+    "",
+    `[plugins."${PITLANE_CODEX_PLUGIN_CONFIG_KEY}"]`,
+    "enabled = true",
+    "",
+  ].join("\n");
+  const script = buildCodexPluginHooksTrustedScript(configPath);
+
+  await fs.writeFile(configPath, baseConfig, "utf8");
+  await assert.rejects(
+    execFileAsync("bash", ["-c", script]),
+    /Codex plugin hook is untrusted/u,
+  );
+
+  await fs.writeFile(configPath, [
+    "[features]",
+    "plugins = true",
+    "plugin_hooks = true",
+    "",
+    `[plugins . "${RTK_CODEX_PLUGIN_CONFIG_KEY}"]`,
+    "enabled = true",
+    "",
+  ].join("\n"), "utf8");
+  await assert.rejects(
+    execFileAsync("bash", ["-c", script]),
+    /Codex plugin hook is untrusted/u,
+  );
+
+  const trustedConfig = ensureCodexPluginHookTrustConfigText(baseConfig, [
+    {
+      key: "rtk-codex-plugin@community-local:hooks/hooks.json:pre_tool_use:0:0",
+      trustedHash: "sha256:wrong",
+    },
+  ]);
+  await fs.writeFile(configPath, trustedConfig, "utf8");
+  await assert.rejects(
+    execFileAsync("bash", ["-c", script]),
+    /trusted_hash mismatch/u,
+  );
+
+  const allTrustEntries = [
+    ...(await discoverCodexPluginHookTrustEntries({
+      pluginId: RTK_CODEX_PLUGIN_CONFIG_KEY,
+      pluginRoot: rtkPluginRoot,
+    })),
+    ...(await discoverCodexPluginHookTrustEntries({
+      pluginId: PITLANE_CODEX_PLUGIN_CONFIG_KEY,
+      pluginRoot: pitlanePluginRoot,
+    })),
+  ];
+  const fullyTrustedConfig = ensureCodexPluginHookTrustConfigText(
+    baseConfig.replace("plugins = true", "plugins = true # inline comment"),
+    allTrustEntries,
+  );
+  await fs.writeFile(configPath, fullyTrustedConfig, "utf8");
+  await assert.doesNotReject(execFileAsync("bash", ["-c", script]));
+
+  const disabledPluginConfig = ensureCodexPluginHookTrustConfigText([
+    "[features]",
+    "plugins = true",
+    "plugin_hooks = true",
+    "",
+    `[plugins."${RTK_CODEX_PLUGIN_CONFIG_KEY}"]`,
+    "enabled = false # temporarily disabled",
+    "",
+    `[plugins."${PITLANE_CODEX_PLUGIN_CONFIG_KEY}"]`,
+    "enabled = true",
+    "",
+  ].join("\n"), allTrustEntries);
+  await fs.writeFile(configPath, disabledPluginConfig, "utf8");
+  await assert.rejects(
+    execFileAsync("bash", ["-c", script]),
+    /inactive/u,
+  );
+
+  const disabledHookKey =
+    "rtk-codex-plugin@community-local:hooks/hooks.json:pre_tool_use:0:0";
+  const disabledHookConfig = fullyTrustedConfig.replace(
+    `[hooks.state."${disabledHookKey}"]\ntrusted_hash`,
+    `[hooks.state."${disabledHookKey}"]\nenabled = false # temporarily disabled\ntrusted_hash`,
+  );
+  await fs.writeFile(configPath, disabledHookConfig, "utf8");
+  await assert.rejects(
+    execFileAsync("bash", ["-c", script]),
+    /disabled/u,
+  );
+
+  const disabledSpacedHookConfig = fullyTrustedConfig.replace(
+    `[hooks.state."${disabledHookKey}"]\ntrusted_hash`,
+    `[hooks . state . "${disabledHookKey}"]\nenabled = false # temporarily disabled\ntrusted_hash`,
+  );
+  await fs.writeFile(configPath, disabledSpacedHookConfig, "utf8");
+  await assert.rejects(
+    execFileAsync("bash", ["-c", script]),
+    /disabled/u,
+  );
+
+  await fs.writeFile(configPath, fullyTrustedConfig, "utf8");
+  await fs.chmod(path.join(rtkPluginRoot, "hooks", "rtk-codex-hook"), 0o600);
+  await assert.rejects(
+    execFileAsync("bash", ["-c", script]),
+    /not executable/u,
   );
 });
 

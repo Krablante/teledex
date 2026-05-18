@@ -306,6 +306,71 @@ test("summarizeCodexEvent keeps app-server goal accounting updates", () => {
   });
 });
 
+test("summarizeCodexEvent keeps safe app-server hook economy summaries", () => {
+  const summary = summarizeCodexEvent({
+    method: "hook/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      run: {
+        id: "run-1",
+        eventName: "postToolUse",
+        handlerType: "command",
+        executionMode: "sync",
+        source: "plugin",
+        key: "rtk-codex-plugin@community-local:postToolUse:0",
+        pluginId: "rtk-codex-plugin@community-local",
+        currentHash: "sha256:abc",
+        trustStatus: "trusted",
+        status: "completed",
+        durationMs: 17,
+        entries: [{ kind: "feedback", text: "do not expose this raw hook text" }],
+        economy: {
+          decisionType: "compact",
+          commandClass: "unified_exec",
+          outputOriginalBytes: 20000,
+          outputModelVisibleBytes: 4000,
+          estimatedSavedTokens: 4000,
+          artifactRefs: ["/tmp/artifact.txt"],
+        },
+      },
+    },
+  });
+
+  assert.equal(summary.kind, "hook");
+  assert.equal(summary.eventType, "hook.completed");
+  assert.equal(summary.threadId, "thread-1");
+  assert.equal(summary.turnId, "turn-1");
+  assert.deepEqual(summary.hook, {
+    id: "run-1",
+    eventName: "postToolUse",
+    handlerType: "command",
+    executionMode: "sync",
+    source: "plugin",
+    key: "rtk-codex-plugin@community-local:postToolUse:0",
+    pluginId: "rtk-codex-plugin@community-local",
+    currentHash: "sha256:abc",
+    trustStatus: "trusted",
+    status: "completed",
+    durationMs: 17,
+    economy: {
+      decisionType: "compact",
+      commandClass: "unified_exec",
+      bypassReason: null,
+      exactOutputReason: null,
+      originalBytes: null,
+      replacementBytes: null,
+      modelVisibleBytes: null,
+      outputOriginalBytes: 20000,
+      outputModelVisibleBytes: 4000,
+      tokenBudget: null,
+      originalTokenCount: null,
+      estimatedSavedTokens: 4000,
+      artifactRefs: ["/tmp/artifact.txt"],
+    },
+  });
+});
+
 test("summarizeCodexEvent still understands legacy exec events", () => {
   const turnSummary = summarizeCodexEvent({
     type: "turn.completed",

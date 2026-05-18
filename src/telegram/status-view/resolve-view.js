@@ -26,6 +26,25 @@ import {
 } from "./runtime-profile.js";
 import { buildStatusMessage } from "./message.js";
 
+async function loadPersistedHookEconomySummary(sessionService, session) {
+  if (
+    !session
+    || typeof sessionService?.sessionStore?.readSessionText !== "function"
+  ) {
+    return null;
+  }
+
+  try {
+    const text = await sessionService.sessionStore.readSessionText(
+      session,
+      "hook-economy.json",
+    );
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function resolveStatusView({
   fetchRemoteCodexContextSnapshotImpl = fetchRemoteCodexContextSnapshot,
   state,
@@ -142,6 +161,16 @@ export async function resolveStatusView({
           ...(liveStatusWarning ? { liveStatusWarning } : {}),
         }
       : null;
+  const persistedHookEconomySummary = activeRun?.state?.hookEconomy?.completedRuns
+    ? null
+    : await loadPersistedHookEconomySummary(sessionService, handledSession);
+  const statusDisplayConfig =
+    persistedHookEconomySummary
+      ? {
+          ...(displayConfig ?? {}),
+          hookEconomySummary: persistedHookEconomySummary,
+        }
+      : displayConfig;
 
   return {
     session: handledSession,
@@ -160,7 +189,7 @@ export async function resolveStatusView({
       runtimeProfiles,
       language,
       limitsSummary,
-      displayConfig,
+      statusDisplayConfig,
       executionHost,
     ),
   };

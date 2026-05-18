@@ -26,6 +26,10 @@ import {
 import { buildCompactResumePrompt } from "./compact-resume.js";
 import { buildDeveloperContextSignature } from "./developer-context-signature.js";
 import {
+  buildRuntimeHookEventDetails,
+  recordHookEconomyEvent,
+} from "./hook-economy.js";
+import {
   buildClearContinuitySessionPatch,
   clearRunContinuityState,
   sanitizeContextSnapshotForBackend,
@@ -367,6 +371,26 @@ async function handleAttemptEvent(pool, run, summary, attemptInsight) {
     }
   } else if (summary.kind === "goal" && primaryThreadEvent) {
     state.currentGoal = summary.goal || state.currentGoal;
+  } else if (summary.kind === "hook" && primaryThreadEvent) {
+    state.hookEconomy = recordHookEconomyEvent(state.hookEconomy, summary);
+    if (summary.eventType === "hook.completed") {
+      const details = buildRuntimeHookEventDetails({
+        session: run.session,
+        summary,
+      });
+      try {
+        if (details) {
+          await pool.runtimeObserver?.appendEvent?.("codex.hook.completed", details);
+        }
+        await pool.sessionStore.writeSessionJson(
+          run.session,
+          "hook-economy.json",
+          state.hookEconomy,
+        );
+      } catch (error) {
+        state.warnings.push(`hook economy telemetry write failed: ${error?.message || error}`);
+      }
+    }
   } else if (summary.kind === "agent_message") {
     const messagePhase = summary.messagePhase || "final_answer";
     const normalizedAgentMessage = normalizeTelegramReply(summary.text);

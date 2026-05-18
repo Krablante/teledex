@@ -126,6 +126,157 @@ test("buildStatusMessage reports session state, binding, and run state", () => {
   assert.match(text, /лимиты 5h: 89% осталось/u);
 });
 
+test("buildStatusMessage reports active hook economy summary", () => {
+  const text = buildStatusMessage(
+    {
+      codexModel: "gpt-5.4",
+      codexReasoningEffort: "xhigh",
+      codexContextWindow: 320000,
+      codexAutoCompactTokenLimit: 300000,
+    },
+    {
+      chat: { id: -1000000 },
+      message_thread_id: 7,
+    },
+    {
+      session_key: "-1000000:7",
+      topic_name: "Hook economy",
+      lifecycle_state: "active",
+      last_run_status: "running",
+      workspace_binding: {
+        repo_root: "/path/to/workspace",
+        cwd: "/path/to/workspace",
+        branch: "main",
+        worktree_path: "/path/to/workspace",
+      },
+    },
+    {
+      state: {
+        status: "running",
+        hookEconomy: {
+          completedRuns: 3,
+          byDecision: { compact: 2, rewrite: 1 },
+          byPlugin: {
+            "rtk-codex-plugin@community-local": 2,
+            "pitlane-codex-plugin@community-local": 1,
+          },
+          totals: {
+            outputOriginalBytes: 12000,
+            outputModelVisibleBytes: 3000,
+            estimatedSavedTokens: 2250,
+          },
+        },
+      },
+    },
+    null,
+    null,
+    "rus",
+    buildWindowedLimitsSummary(),
+  );
+
+  assert.match(text, /hook economy: 3 completed, ~2250 saved tokens/u);
+  assert.match(text, /hook output bytes: 3000 \/ 12000 visible/u);
+  assert.match(text, /hook decisions: compact:2, rewrite:1/u);
+  assert.match(text, /hook plugins: rtk-codex-plugin@community-local:2, pitlane-codex-plugin@community-local:1/u);
+});
+
+test("buildStatusMessage reports persisted hook economy summary without active run", () => {
+  const text = buildStatusMessage(
+    {
+      codexModel: "gpt-5.4",
+      codexReasoningEffort: "xhigh",
+      codexContextWindow: 320000,
+      codexAutoCompactTokenLimit: 300000,
+    },
+    {
+      chat: { id: -1000000 },
+      message_thread_id: 7,
+    },
+    {
+      session_key: "-1000000:7",
+      topic_name: "Hook economy",
+      lifecycle_state: "active",
+      last_run_status: "completed",
+      workspace_binding: {
+        repo_root: "/path/to/workspace",
+        cwd: "/path/to/workspace",
+        branch: "main",
+        worktree_path: "/path/to/workspace",
+      },
+    },
+    null,
+    null,
+    null,
+    "rus",
+    buildWindowedLimitsSummary(),
+    {
+      hookEconomySummary: {
+        completedRuns: 2,
+        byDecision: { compact: 1, rewrite: 1 },
+        byPlugin: {
+          "rtk-codex-plugin@community-local": 1,
+          "pitlane-codex-plugin@community-local": 1,
+        },
+        totals: {
+          outputOriginalBytes: 8000,
+          outputModelVisibleBytes: 2000,
+          estimatedSavedTokens: 1500,
+        },
+      },
+    },
+  );
+
+  assert.match(text, /hook economy: 2 completed, ~1500 saved tokens/u);
+  assert.match(text, /hook output bytes: 2000 \/ 8000 visible/u);
+});
+
+test("buildStatusMessage clamps negative hook economy estimates", () => {
+  const text = buildStatusMessage(
+    {
+      codexModel: "gpt-5.4",
+      codexReasoningEffort: "xhigh",
+      codexContextWindow: 320000,
+      codexAutoCompactTokenLimit: 300000,
+    },
+    {
+      chat: { id: -1000000 },
+      message_thread_id: 7,
+    },
+    {
+      session_key: "-1000000:7",
+      topic_name: "Hook economy",
+      lifecycle_state: "active",
+      last_run_status: "completed",
+      workspace_binding: {
+        repo_root: "/path/to/workspace",
+        cwd: "/path/to/workspace",
+        branch: "main",
+        worktree_path: "/path/to/workspace",
+      },
+    },
+    null,
+    null,
+    null,
+    "eng",
+    buildWindowedLimitsSummary(),
+    {
+      hookEconomySummary: {
+        completedRuns: 1,
+        byDecision: { compact: 1 },
+        byPlugin: { "rtk-codex-plugin@community-local": 1 },
+        totals: {
+          outputOriginalBytes: 12000,
+          outputModelVisibleBytes: 4000,
+          estimatedSavedTokens: -3000,
+        },
+      },
+    },
+  );
+
+  assert.match(text, /hook economy: 1 completed, ~2000 saved tokens/u);
+  assert.doesNotMatch(text, /~-3000 saved tokens/u);
+});
+
 test("buildStatusMessage reports DeepSeek status with DeepSeek usage semantics", () => {
   const text = buildStatusMessage(
     {
@@ -859,6 +1010,77 @@ test("resolveStatusView prefers live runtime overrides over the codex config fil
   assert.match(resolved.text, /auto-compact: 305000/u);
   assert.doesNotMatch(resolved.text, /111111/u);
   assert.doesNotMatch(resolved.text, /101010/u);
+});
+
+test("resolveStatusView reads persisted hook economy summary after run completion", async () => {
+  const state = {
+    codexModel: "gpt-5.4",
+    codexReasoningEffort: "xhigh",
+    codexContextWindow: 320000,
+    codexAutoCompactTokenLimit: 300000,
+  };
+  const session = {
+    session_key: "-1000000:7",
+    topic_name: "Persisted hook economy",
+    lifecycle_state: "active",
+    last_run_status: "completed",
+    workspace_binding: {
+      repo_root: "/path/to/workspace",
+      cwd: "/path/to/workspace",
+      branch: "main",
+      worktree_path: "/path/to/workspace",
+    },
+  };
+  const sessionService = {
+    sessionStore: {
+      async readSessionText(currentSession, relativePath) {
+        assert.equal(currentSession, session);
+        assert.equal(relativePath, "hook-economy.json");
+        return JSON.stringify({
+          completedRuns: 2,
+          byDecision: { compact: 1, rewrite: 1 },
+          byPlugin: { "rtk-codex-plugin@community-local": 2 },
+          totals: {
+            outputOriginalBytes: 9000,
+            outputModelVisibleBytes: 1000,
+            estimatedSavedTokens: 2000,
+          },
+        });
+      },
+    },
+    async resolveCodexRuntimeProfile() {
+      return {
+        model: "gpt-5.4",
+        reasoningEffort: "xhigh",
+      };
+    },
+    async resolveContextSnapshot(currentSession) {
+      return {
+        session: currentSession,
+        snapshot: null,
+      };
+    },
+    async getCodexLimitsSummary() {
+      return null;
+    },
+    async resolveSessionExecution() {
+      return null;
+    },
+  };
+
+  const resolved = await resolveStatusView({
+    state,
+    message: {
+      chat: { id: -1000000 },
+      message_thread_id: 7,
+    },
+    session,
+    sessionService,
+    language: "eng",
+  });
+
+  assert.match(resolved.text, /hook economy: 2 completed, ~2000 saved tokens/u);
+  assert.match(resolved.text, /hook output bytes: 1000 \/ 9000 visible/u);
 });
 
 test("resolveStatusView prefers active run token usage over stored session snapshot", async () => {

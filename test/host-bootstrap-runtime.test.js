@@ -238,7 +238,28 @@ test("runHostBootstrapRuntime mirrors the usable Codex profile subset and option
   );
   await fs.writeFile(
     path.join(rtkPluginPath, "hooks", "hooks.json"),
-    '{"hooks":{}}\n',
+    JSON.stringify({
+      hooks: {
+        PreToolUse: [{
+          matcher: "^(Bash|exec_command|functions\\.exec_command)$",
+          hooks: [{
+            type: "command",
+            command: "${PLUGIN_ROOT}/hooks/rtk-codex-hook",
+            timeout: 5,
+            statusMessage: "RTK command rewrite",
+          }],
+        }],
+        PostToolUse: [{
+          matcher: "^Bash$",
+          hooks: [{
+            type: "command",
+            command: "${PLUGIN_ROOT}/hooks/rtk-output-post-hook",
+            timeout: 8,
+            statusMessage: "RTK output budget guard",
+          }],
+        }],
+      },
+    }, null, 2),
     "utf8",
   );
   await fs.writeFile(
@@ -265,7 +286,19 @@ test("runHostBootstrapRuntime mirrors the usable Codex profile subset and option
   );
   await fs.writeFile(
     path.join(pitlanePluginPath, "hooks", "hooks.json"),
-    '{"hooks":{}}\n',
+    JSON.stringify({
+      hooks: {
+        PreToolUse: [{
+          matcher: "^(Bash|exec_command|functions\\.exec_command)$",
+          hooks: [{
+            type: "command",
+            command: "${PLUGIN_ROOT}/hooks/pitlane-codex-hook",
+            timeout: 5,
+            statusMessage: "Pitlane code navigation rewrite",
+          }],
+        }],
+      },
+    }, null, 2),
     "utf8",
   );
   await fs.writeFile(
@@ -389,6 +422,20 @@ test("runHostBootstrapRuntime mirrors the usable Codex profile subset and option
     recorder.getCapturedConfigText(),
     new RegExp(`^\\[plugins\\."${PITLANE_CODEX_PLUGIN_CONFIG_KEY}"\\]\\nenabled = true$`, "mu"),
   );
+  assert.match(
+    recorder.getCapturedConfigText(),
+    /^\[hooks\.state\."rtk-codex-plugin@community-local:hooks\/hooks\.json:pre_tool_use:0:0"\]\ntrusted_hash = "sha256:[0-9a-f]{64}"$/mu,
+  );
+  assert.match(
+    recorder.getCapturedConfigText(),
+    /^\[hooks\.state\."rtk-codex-plugin@community-local:hooks\/hooks\.json:post_tool_use:0:0"\]\ntrusted_hash = "sha256:[0-9a-f]{64}"$/mu,
+  );
+  assert.match(
+    recorder.getCapturedConfigText(),
+    /^\[hooks\.state\."pitlane-codex-plugin@community-local:hooks\/hooks\.json:pre_tool_use:0:0"\]\ntrusted_hash = "sha256:[0-9a-f]{64}"$/mu,
+  );
+  assert.equal(result.hook_trust.rtk.length, 2);
+  assert.equal(result.hook_trust.pitlane.length, 1);
   assert.match(recorder.getCapturedConfigText(), /model = "gpt-5\.4"/u);
   assert.match(recorder.getCapturedConfigText(), /\[projects\."\/path\/to\/worker-workspace"\]/u);
   assert.match(recorder.getCapturedConfigText(), /path = "\/home\/workera\/\.codex\/skills\/vercel-deploy\/SKILL\.md"/u);

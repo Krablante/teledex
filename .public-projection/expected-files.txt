@@ -80,6 +80,7 @@ src/cli/install-user-service.js
 src/cli/interactive-prompts.js
 src/cli/registry-sync.js
 src/cli/run-background-jobs.js
+src/cli/run-hook-economy-canary.js
 src/cli/run-live-tests.js
 src/cli/run-maintenance.js
 src/cli/run-rollout-controller.js
@@ -151,6 +152,7 @@ src/pty-worker/codex-runner-transport.js
 src/pty-worker/codex-runner.js
 src/pty-worker/compact-resume.js
 src/pty-worker/developer-context-signature.js
+src/pty-worker/hook-economy.js
 src/pty-worker/host-aware-run-task.js
 src/pty-worker/remote-executor-contract.js
 src/pty-worker/remote-executor.js
@@ -172,6 +174,7 @@ src/pty-worker/worker-pool-transport.js
 src/pty-worker/worker-pool.js
 src/rollout/session-ownership.js
 src/runtime/codex-child-env.js
+src/runtime/codex-plugin-hook-trust.js
 src/runtime/executable-path.js
 src/runtime/fs-retry.js
 src/runtime/live-command-prompts.js
@@ -385,6 +388,7 @@ test/cli-env-file-args.test.js
 test/codex-child-env.test.js
 test/codex-limits.test.js
 test/codex-mcp-config.test.js
+test/codex-plugin-hook-trust.test.js
 test/codex-runner-common.test.js
 test/codex-runner-lifecycle.test.js
 test/codex-runner-recovery.test.js
@@ -413,6 +417,7 @@ test/global-codex-settings-store.test.js
 test/global-prompt-suffix-store.test.js
 test/goal-command.test.js
 test/guidebook.test.js
+test/hook-economy-canary.test.js
 test/host-aware-run-task.test.js
 test/host-bootstrap-runtime.test.js
 test/host-command-runner.test.js

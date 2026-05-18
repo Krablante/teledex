@@ -5,18 +5,25 @@ import { pathToFileURL } from "node:url";
 
 import { loadRuntimeConfig } from "../config/runtime-config.js";
 import {
+  RTK_CODEX_PLUGIN_CONFIG_KEY,
   ensureWorkspaceRtkCodexPluginConfigText,
   removeWorkspaceRtkCodexPluginConfigText,
   resolveWorkspaceRtkCodexPluginCachePath,
   resolveWorkspaceRtkCodexPluginSource,
 } from "../runtime/rtk-codex-plugin.js";
 import {
+  PITLANE_CODEX_PLUGIN_CONFIG_KEY,
   ensurePitlaneCodexPluginConfigText,
   removePitlaneCodexPluginConfigText,
   removePitlaneMcpServerConfigText,
   resolvePitlaneCodexPluginCachePath,
   resolvePitlaneCodexPluginSource,
 } from "../runtime/pitlane-codex-plugin.js";
+import {
+  discoverCodexPluginHookTrustEntries,
+  ensureCodexPluginHookTrustConfigText,
+  summarizeCodexPluginHookTrustEntries,
+} from "../runtime/codex-plugin-hook-trust.js";
 import { writeTextAtomic } from "../state/file-utils.js";
 
 const COPY_EXCLUDES = new Set([
@@ -99,15 +106,21 @@ async function syncPlugin({
 
 export function renderCodexPluginSyncConfigText(configText, {
   rtkSynced = false,
+  rtkHookTrustEntries = [],
   pitlaneSynced = false,
+  pitlaneHookTrustEntries = [],
 } = {}) {
   const withoutPitlaneMcp = removePitlaneMcpServerConfigText(configText);
   const withRtk = rtkSynced
     ? ensureWorkspaceRtkCodexPluginConfigText(withoutPitlaneMcp)
     : removeWorkspaceRtkCodexPluginConfigText(withoutPitlaneMcp);
-  return pitlaneSynced
+  const withPitlane = pitlaneSynced
     ? ensurePitlaneCodexPluginConfigText(withRtk)
     : removePitlaneCodexPluginConfigText(withRtk);
+  return ensureCodexPluginHookTrustConfigText(withPitlane, [
+    ...rtkHookTrustEntries,
+    ...pitlaneHookTrustEntries,
+  ]);
 }
 
 async function main() {
@@ -138,9 +151,23 @@ async function main() {
     label: "pitlane",
     source: pitlaneSource,
   });
+  const rtkHookTrustEntries = rtk.status === "synced"
+    ? await discoverCodexPluginHookTrustEntries({
+      pluginId: RTK_CODEX_PLUGIN_CONFIG_KEY,
+      pluginRoot: rtk.cache_path,
+    })
+    : [];
+  const pitlaneHookTrustEntries = pitlane.status === "synced"
+    ? await discoverCodexPluginHookTrustEntries({
+      pluginId: PITLANE_CODEX_PLUGIN_CONFIG_KEY,
+      pluginRoot: pitlane.cache_path,
+    })
+    : [];
 
   const renderedConfigText = renderCodexPluginSyncConfigText(configText, {
+    rtkHookTrustEntries,
     pitlaneSynced: pitlane.status === "synced",
+    pitlaneHookTrustEntries,
     rtkSynced: rtk.status === "synced",
   });
   await writeTextAtomic(config.codexConfigPath, renderedConfigText);
@@ -151,6 +178,10 @@ async function main() {
     config_path: config.codexConfigPath,
     rtk_codex_plugin: rtk,
     pitlane_codex_plugin: pitlane,
+    hook_trust: {
+      rtk: summarizeCodexPluginHookTrustEntries(rtkHookTrustEntries),
+      pitlane: summarizeCodexPluginHookTrustEntries(pitlaneHookTrustEntries),
+    },
   };
 
   console.log(JSON.stringify(summary, null, 2));

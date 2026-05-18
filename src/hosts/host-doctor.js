@@ -5,6 +5,7 @@ import { writeTextAtomic } from "../state/file-utils.js";
 import {
   buildCodexExecHelpScript,
   buildCodexPitlaneCleanupScript,
+  buildCodexPluginHooksTrustedScript,
   buildCodexRtkPluginReadinessScript,
   buildDockerRuntimeScript,
   buildExistsScript,
@@ -22,11 +23,12 @@ import { runHostBash } from "./host-command-runner.js";
 
 export {
   buildCodexPitlaneCleanupScript,
+  buildCodexPluginHooksTrustedScript,
   buildWorkerMcpConfigScript,
   resolveCodexSpaceFreshnessMaxAgeSecs,
 } from "./host-doctor/check-scripts.js";
 
-const NON_BLOCKING_CHECK_IDS = new Set(["sudo", "codex-rtk-plugin"]);
+const NON_BLOCKING_CHECK_IDS = new Set(["sudo"]);
 
 function buildCheck(id, label, ok, detail = null) {
   return {
@@ -279,6 +281,17 @@ export async function inspectHostReadiness({
       id: "codex-pitlane-cleanup",
       label: "codex config has standalone pitlane cleanup",
       script: buildCodexPitlaneCleanupScript(host.codex_config_path),
+    }),
+  );
+  checks.push(
+    await runDoctorCheck({
+      connectTimeoutSecs,
+      currentHostId,
+      execFileImpl,
+      host,
+      id: "codex-plugin-hooks-trusted",
+      label: "Codex plugin hooks are trusted and executable",
+      script: buildCodexPluginHooksTrustedScript(host.codex_config_path),
     }),
   );
   if (host.host_id !== currentHostId) {

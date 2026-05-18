@@ -183,6 +183,7 @@ export async function startPromptRun(
     currentRunClosedTokenUsage: null,
     currentRunCumulativeTokenUsageBaseline: null,
     currentRunCumulativeTokenUsageSegment: null,
+    hookEconomy: null,
     currentGoal: null,
     developerContextHash: session.codex_thread_developer_context_hash ?? null,
     latestCommand: null,

@@ -17,6 +17,11 @@ import {
   resolvePitlaneCodexPluginCachePath,
   resolvePitlaneCodexPluginSource,
 } from "../runtime/pitlane-codex-plugin.js";
+import {
+  discoverCodexPluginHookTrustEntries,
+  ensureCodexPluginHookTrustConfigText,
+  summarizeCodexPluginHookTrustEntries,
+} from "../runtime/codex-plugin-hook-trust.js";
 import { runCommand, runHostBash, shellQuote } from "./host-command-runner.js";
 import {
   buildHybridCodexMcpConfigText,
@@ -702,6 +707,18 @@ export async function runHostBootstrapRuntime({
     pitlanePluginPath,
     sourceCodexRoot: resolvedSourceCodexRoot,
   });
+  const rtkHookTrustEntries = rtkCodexPluginSync.status === "synced"
+    ? await discoverCodexPluginHookTrustEntries({
+      pluginId: RTK_CODEX_PLUGIN_CONFIG_KEY,
+      pluginRoot: rtkCodexPluginSync.source_path,
+    })
+    : [];
+  const pitlaneHookTrustEntries = pitlaneCodexPluginSync.status === "synced"
+    ? await discoverCodexPluginHookTrustEntries({
+      pluginId: PITLANE_CODEX_PLUGIN_CONFIG_KEY,
+      pluginRoot: pitlaneCodexPluginSync.source_path,
+    })
+    : [];
   const baseConfigText = buildHybridCodexMcpConfigText(
     normalizeCodexConfigText(
       await fs.readFile(resolvedSourceConfigPath, "utf8"),
@@ -728,11 +745,18 @@ export async function runHostBootstrapRuntime({
   const normalizedPluginConfigText = pitlaneCodexPluginSync.status === "synced"
     ? ensurePitlaneCodexPluginConfigText(normalizedConfigText)
     : removePitlaneCodexPluginConfigText(normalizedConfigText);
+  const trustedPluginConfigText = ensureCodexPluginHookTrustConfigText(
+    normalizedPluginConfigText,
+    [
+      ...rtkHookTrustEntries,
+      ...pitlaneHookTrustEntries,
+    ],
+  );
   const normalizedConfigPath = path.join(
     hostsRoot,
     `${host.host_id}-bootstrap-config.toml`,
   );
-  await writeTextAtomic(normalizedConfigPath, normalizedPluginConfigText);
+  await writeTextAtomic(normalizedConfigPath, trustedPluginConfigText);
   await fs.chmod(normalizedConfigPath, 0o600).catch(() => null);
   try {
     await copyLocalFileToHost({
@@ -860,6 +884,10 @@ export async function runHostBootstrapRuntime({
       rtk_version: probeFields.rtk_version || null,
     },
     pitlane_codex_plugin: pitlaneCodexPluginSync,
+    hook_trust: {
+      rtk: summarizeCodexPluginHookTrustEntries(rtkHookTrustEntries),
+      pitlane: summarizeCodexPluginHookTrustEntries(pitlaneHookTrustEntries),
+    },
     mcp_profile: {
       shared_host: currentHost?.ssh_target || currentHostId,
       shared_transport: "ssh+local-docker-stdio",
